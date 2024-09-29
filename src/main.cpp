@@ -4,17 +4,19 @@
 #include <algorithm>
 #include <functional>
 
-constexpr bool isAnyMetaCharacter(const char c) {
+constexpr bool isAnyMetaCharacter(const char c)
+{
     return (
             (c == '^') ||
             (c == '$') ||
 
             (c == '[') ||
             (c == ']') ||
-            (c == '{') ||
-            (c == '}') ||
             (c == '(') ||
             (c == ')') ||
+
+            (c == '{') ||
+            (c == '}') ||
 
             (c == '+') ||
             (c == '*') ||
@@ -28,7 +30,8 @@ constexpr bool isAnyMetaCharacter(const char c) {
     );
 }
 
-constexpr bool isQuantifier(const char c) {
+constexpr bool isQuantifier(const char c)
+{
     return (
             (c == '+') ||
             (c == '*') ||
@@ -36,7 +39,18 @@ constexpr bool isQuantifier(const char c) {
     );
 }
 
-constexpr bool isCharacterClass(const char c) {
+constexpr bool isQuantifierAdvanced(const char c)
+{
+    return (
+            (c == '+') ||
+            (c == '*') ||
+            (c == '?') ||
+            (c == '{')
+    );
+}
+
+constexpr bool isCharacterClass(const char c)
+{
     return (
             (c == 'w') ||
             (c == 'W') ||
@@ -52,6 +66,15 @@ constexpr bool isCharacterClass(const char c) {
     );
 }
 
+constexpr bool isGroup (const char c)
+{
+        return (
+            (c == '[') ||
+            (c == ']') ||
+            (c == '(') ||
+            (c == ')')
+        );
+}
 
 
 
@@ -60,7 +83,8 @@ constexpr bool isCharacterClass(const char c) {
 
 
 
-constexpr bool is_w(const char c) {
+constexpr bool is_w(const char c)
+{
     return (
             (c >= 'a' && c <= 'z') ||
             (c >= 'Z' && c <= 'Z') ||
@@ -68,14 +92,17 @@ constexpr bool is_w(const char c) {
             (c == '_')
     );
 }
-constexpr bool is_W(const char c) {
+constexpr bool is_W(const char c)
+{
     return !is_w(c);
 }
 
-constexpr bool is_d(const char c) {
+constexpr bool is_d(const char c)
+{
     return isdigit(c);
 }
-constexpr bool is_D(const char c) {
+constexpr bool is_D(const char c)
+{
     return !is_d(c);
 }
 
@@ -85,7 +112,8 @@ constexpr bool is_D(const char c) {
 
 
 
-std::function<bool(const char)> characterClassSelector(const char c) {
+std::function<bool(const char)> characterClassSelector(const char c)
+{
     switch (c)
     {
     case 'w':
@@ -109,10 +137,18 @@ std::function<bool(const char)> characterClassSelector(const char c) {
 
 
 
-std::function<bool(const char)> plainCharacterMatcherBuilder(const std::vector<const char>& plainChars) {
-    return [&plainChars](const char c) -> bool {
-        for (const auto plainChar : plainChars) {
-            if (plainChar == c) {
+
+
+
+
+std::function<bool(const char)> plainCharacterMatcherBuilder(const std::vector<const char>& plainChars) 
+{
+    return [&plainChars](const char c) -> bool 
+    {
+        for (const auto plainChar : plainChars)
+        {
+            if (plainChar == c)
+            {
                 return true;
             }
         }
@@ -129,42 +165,49 @@ std::function<bool(const char)> plainCharacterMatcherBuilder(const std::vector<c
 
 
 
-bool matcherControl(const std::vector<std::function<bool(const char)>>& matchers, const char c) {
-    for (const auto& matcher : matchers) {
-        if (matcher(c)) {
+bool matcherControl(const std::vector<std::function<bool(const char)>>& matchers, const char c)
+{
+    for (const auto& matcher : matchers)
+    {
+        if (matcher(c))
+        {
             return true;
         }
     }
     return false;
 }
 
-bool matcherControlSetup(const std::string& simple_sub_pattern, const char c) {
+bool matcherControlSetup(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end, const char c)
+{
     std::vector<std::function<bool(const char)>> matchers{};
     std::vector<const char> plainChars{};
 
-    auto it = simple_sub_pattern.begin();
-    while (it != simple_sub_pattern.end()) {
-        // Early exit if sub_pattern contains `.`
-        if (*it == '.') {
+    while (pattern_start != pattern_end)
+    {
+        if (*pattern_start == '.')                      // Early exit if sub_pattern contains `.`
+        {
             return true;
         }
-        // handle scape character
-        else if (*it == '\\') {
-            if (it + 1 == simple_sub_pattern.end()) {
+        else if (*pattern_start == '\\')                // handle scape character
+        {
+            if (pattern_start + 1 == pattern_end)
+            {
                 throw std::invalid_argument("Error: Dangling backslash.");
             }
-            else if (isCharacterClass(*(it + 1))) {
-                matchers.push_back(characterClassSelector(*(it + 1)));
+            else if (isCharacterClass(*(pattern_start + 1)))
+            {
+                matchers.push_back(characterClassSelector(*(pattern_start + 1)));
             }
-            else {
-                plainChars.push_back(*(it + 1));
+            else
+            {
+                plainChars.push_back(*(pattern_start + 1));
             }
-            it += 2;
+            pattern_start += 2;
         }
-        // plain character
-        else {
-            plainChars.push_back(*it);
-            ++it;
+        else                                            // plain character
+        {
+            plainChars.push_back(*pattern_start);
+            ++pattern_start;
         }
     }
 
@@ -176,19 +219,73 @@ bool matcherControlSetup(const std::string& simple_sub_pattern, const char c) {
 
 
 
+bool patternControl(std::string::const_iterator text_start, std::string::const_iterator text_end,
+                    std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
+{
+    if (pattern_start == pattern_end)
+    {
+        return true;                            // pattern matched
+    }
+    if (*pattern_start == '$' && pattern_start + 1 == pattern_end)
+    {
+        return text_start == text_end;          // pattern must end here
+    }
+    if (text_start == text_end)
+    {
+        return false;                           // text ended without match
+    }
+    if (isQuantifierAdvanced(*pattern_start))
+    {
+        return false;                           // throw std::invalid_argument("Error: Invalid target for quantifier.");
+    }
+    if (*pattern_start == '^' || *pattern_start == '$')
+    {
+        return false;                           // misused meta characters making regex impossible to have a valid match
+    }
 
+    if (isGroup(*pattern_start))
+    {
+        //handle groups
+    }
 
+    // if (*pattern_start == '|') // must be handled elsewhere{}
 
-std::function<bool(const char)> handlePositiveGroup(const std::string& groupPattern) {
-    return [groupPattern](const char c) -> bool {
-        for (auto it = groupPattern.begin() + 1, end = groupPattern.end() - 1; it != end; ++it) {
-            if (*it == c) {
-                return true;
-            }
+    if (*pattern_start == '\\')
+    {
+        if (pattern_start + 1 == pattern_end)
+        {
+            return false; // throw std::invalid_argument("Error: Dangling backslash.");
         }
-        return false;
-    };
+        // "\xq" where x is character and q is quantifier
+        if (pattern_start + 2 != pattern_end && isQuantifierAdvanced(*(pattern_start + 2)))
+        {
+            // handle quantifier
+        } 
+        // "\xz" where x is character and z is not quantifier
+        // "\x"  where x is character and the pattern ends after x
+        else if (matcherControlSetup(pattern_start, pattern_start + 2, *text_start))
+        {
+            return patternControl(text_start + 1, text_end, pattern_start + 2, pattern_end);
+        }
+    }
+    if (pattern_start + 1 != pattern_end && isQuantifierAdvanced(*(pattern_start + 1)))
+    {
+        // handle quantifier
+    }
+    if (matcherControlSetup(pattern_start, pattern_start + 1, *text_start))
+    {
+        return patternControl(text_start + 1, text_end, pattern_start + 1, pattern_end);
+    }
+    return false;
 }
+
+bool handleQuantifier(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
+{
+
+}
+
+bool quantifierLoop(std::string::const_iterator text_start, std::string::const_iterator text_end, std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
+
 
 std::function<bool(const char)> handleGroups(const std::string &groupPattern) {
     // if (groupPattern.size() < 2) {
