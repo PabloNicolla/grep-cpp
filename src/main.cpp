@@ -39,6 +39,8 @@ bool match_main(std::string::const_iterator text_start, std::string::const_itera
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
 bool handleScapedCharacter(std::string::const_iterator text_start, std::string::const_iterator text_end,
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
+bool group_match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
+  std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
 
 
 constexpr bool isAnyMetaCharacter(const char c)
@@ -414,21 +416,16 @@ bool quantifierLoop(std::string::const_iterator text_start, std::string::const_i
       if (patternControl(text_start, text_end, new_pattern_start, pattern_end)) {                     // RECURSION CALL
         return true;
       }
-      ++text_start;
-    } while (text_start != text_end && matcherControlSetupMemoized(matchers, *text_start, negative_group_flag));
+    } while (text_start != text_end && matcherControlSetupMemoized(matchers, *(text_start++), negative_group_flag));
   }
 
-  while (
-    max > index &&                                                                                  // handle non-infinite optional matches loop
-    text_start != text_end &&
-    matcherControlSetupMemoized(matchers, *text_start, negative_group_flag)
-    ) {
-    if (patternControl(text_start, text_end, new_pattern_start, pattern_end)) {                         // RECURSION CALL
+
+  do                              // handle non-infinite optional matches loop
+  {
+    if (patternControl(text_start, text_end, new_pattern_start, pattern_end)) {                       // RECURSION CALL
       return true;
     }
-    ++text_start;
-    ++index;
-  };
+  } while (max > index++ && text_start != text_end && matcherControlSetupMemoized(matchers, *(text_start++), negative_group_flag));
 
   return false;
 }
@@ -445,7 +442,7 @@ bool handleGroups(std::string::const_iterator text_start, std::string::const_ite
 
     if (group_end == pattern_end)
     {
-      throw std::runtime_error("Closing ')' not found");
+      throw std::runtime_error("Closing ']' not found");
     }
 
     if (*(pattern_start + 1) == '^')
@@ -465,7 +462,14 @@ bool handleGroups(std::string::const_iterator text_start, std::string::const_ite
   }
   if (*pattern_start == '(')
   {
-    
+    auto group_end = std::find(pattern_start, pattern_end, ')');
+
+    if (group_end == pattern_end)
+    {
+      throw std::runtime_error("Closing ')' not found");
+    }
+
+    return group_match_main(text_start, text_end, pattern_start + 1, group_end);
   }
 
   return false;
@@ -526,6 +530,30 @@ std::string::const_iterator findOutermostOr(std::string::const_iterator pattern_
 
 
 
+bool group_match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
+  std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
+{
+  if (pattern_start == pattern_end)
+  {
+    return false;
+  }
+
+  auto orPosition = findOutermostOr(pattern_start, pattern_end);
+
+  while (orPosition != pattern_end)
+  {
+    if (group_match_main(text_start, text_end, pattern_start, orPosition)) {
+      return true;
+    }
+    pattern_start = orPosition + 1;
+    orPosition = findOutermostOr(pattern_start, pattern_end);
+  }
+  
+  return patternControl(text_start, text_end, pattern_start, pattern_end);
+}
+
+
+
 bool match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
 {
@@ -534,23 +562,26 @@ bool match_main(std::string::const_iterator text_start, std::string::const_itera
     return false;
   }
 
+  auto orPosition = findOutermostOr(pattern_start, pattern_end);
+
+  while (orPosition != pattern_end)
+  {
+    if (match_main(text_start, text_end, pattern_start, orPosition)) {
+      return true;
+    }
+    pattern_start = orPosition + 1;
+    orPosition = findOutermostOr(pattern_start, pattern_end);
+  }
+
   if (*pattern_start == '^') {
     return patternControl(text_start, text_end, pattern_start + 1, pattern_end);
   }
 
-  do {
-    auto orPosition = findOutermostOr(pattern_start, pattern_end);
-
-    if (orPosition != pattern_end) {
-      if (match_main(text_start, text_end, pattern_start, orPosition)) {
-        return true;
-      }
-      pattern_start = orPosition + 1;
-    }
-    else {
-      if (patternControl(text_start, text_end, pattern_start, pattern_end)) {
-        return true;
-      }
+  do
+  {
+    if (patternControl(text_start, text_end, pattern_start, pattern_end))
+    {
+      return true;
     }
   } while (++text_start != text_end);
   return false;
@@ -562,23 +593,46 @@ bool match_pattern(const std::string& input_line, const std::string& pattern)
   return match_main(input_line.begin(), input_line.end(), pattern.begin(), pattern.end());
 }
 
-int main(int argc, char* argv[])
+int main(int argc, char *argv[])
 {
-  try
-  {
-    if (match_pattern("abc", "[abc]"))
-    {
-      return 0;
-    }
-    else
-    {
-      return 1;
-    }
-  }
-  catch (const std::runtime_error& e)
-  {
-    std::cerr << e.what() << std::endl;
-    return 1;
-  }
-}
+    // Flush after every std::cout / std::cerr
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
 
+    std::cout << "Logs from your program will appear here" << std::endl;
+
+    if (argc != 3)
+    {
+        std::cerr << "Expected two arguments" << std::endl;
+        return 1;
+    }
+
+    std::string flag = argv[1];
+    std::string pattern = argv[2];
+
+    if (flag != "-E")
+    {
+        std::cerr << "Expected first argument to be '-E'" << std::endl;
+        return 1;
+    }
+
+    std::string input_line;
+    std::getline(std::cin, input_line);
+
+    try
+    {
+        if (match_pattern(input_line, pattern))
+        {
+            return 0;
+        }
+        else
+        {
+            return 1;
+        }
+    }
+    catch (const std::runtime_error &e)
+    {
+        std::cerr << e.what() << std::endl;
+        return 1;
+    }
+}
