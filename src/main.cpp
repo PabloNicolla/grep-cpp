@@ -3,6 +3,8 @@
 #include <string_view>
 #include <algorithm>
 #include <functional>
+#include <stdexcept>
+#include <cctype>
 
 constexpr bool isAnyMetaCharacter(const char c)
 {
@@ -177,7 +179,7 @@ bool matcherControl(const std::vector<std::function<bool(const char)>>& matchers
     return false;
 }
 
-bool matcherControlSetup(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end, const char c)
+std::vector<std::function<bool(const char)>> matcherControlSetupBuilder(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
 {
     std::vector<std::function<bool(const char)>> matchers{};
     std::vector<const char> plainChars{};
@@ -186,7 +188,7 @@ bool matcherControlSetup(std::string::const_iterator pattern_start, std::string:
     {
         if (*pattern_start == '.')                      // Early exit if sub_pattern contains `.`
         {
-            return true;
+            return {[](const char) -> bool { return true; }};
         }
         else if (*pattern_start == '\\')                // handle scape character
         {
@@ -212,6 +214,16 @@ bool matcherControlSetup(std::string::const_iterator pattern_start, std::string:
     }
 
     matchers.push_back(plainCharacterMatcherBuilder(plainChars));
+    return matchers;
+}
+
+bool matcherControlSetup(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end, const char c)
+{
+    return matcherControl(matcherControlSetupBuilder(pattern_start, pattern_end), c);
+}
+
+bool matcherControlSetupMemoized(std::vector<std::function<bool(const char)>>& matchers, const char c)
+{
     return matcherControl(matchers, c);
 }
 
@@ -243,28 +255,23 @@ bool patternControl(std::string::const_iterator text_start, std::string::const_i
         return false;                           // misused meta characters making regex impossible to have a valid match
     }
 
+    // if (*pattern_start == '|') // must be handled elsewhere{}
     if (isGroup(*pattern_start))
     {
         //handle groups
     }
-
-    // if (*pattern_start == '|') // must be handled elsewhere{}
-
     if (*pattern_start == '\\')
     {
         if (pattern_start + 1 == pattern_end)
         {
-            return false; // throw std::invalid_argument("Error: Dangling backslash.");
+            return false;                       // throw std::invalid_argument("Error: Dangling backslash.");
         }
-        // "\xq" where x is character and q is quantifier
-        if (pattern_start + 2 != pattern_end && isQuantifierAdvanced(*(pattern_start + 2)))
+        if (pattern_start + 2 != pattern_end && isQuantifierAdvanced(*(pattern_start + 2)))         // "\xq" where x is a character and q is a quantifier
         {
             // handle quantifier
         } 
-        // "\xz" where x is character and z is not quantifier
-        // "\x"  where x is character and the pattern ends after x
-        else if (matcherControlSetup(pattern_start, pattern_start + 2, *text_start))
-        {
+        else if (matcherControlSetup(pattern_start, pattern_start + 2, *text_start))                // "\xz" where x is a character and z is not a quantifier, or
+        {                                                                                           // "\x"  where x is a character and the pattern ends after x
             return patternControl(text_start + 1, text_end, pattern_start + 2, pattern_end);
         }
     }
@@ -279,12 +286,157 @@ bool patternControl(std::string::const_iterator text_start, std::string::const_i
     return false;
 }
 
-bool handleQuantifier(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
-{
 
+
+
+
+
+
+
+
+
+
+std::string::const_iterator parseQuantifierRange(int& min, int& max, std::string::const_iterator start, std::string::const_iterator end)
+{
+    const auto new_end = std::find(start, end, '}');
+    if (new_end == end)
+    {
+        throw std::runtime_error("Closing '}' not found");
+    }
+
+    auto comma = std::find(start, new_end, ',');
+    
+    // Parse the first number (min)
+    std::string first_num(start, comma);
+    first_num.erase(std::remove_if(first_num.begin(), first_num.end(), ::isspace), first_num.end());
+    
+    if (first_num.empty() || !std::all_of(first_num.begin(), first_num.end(), ::isdigit))
+    {
+        throw std::runtime_error("Invalid number format for min");
+    }
+    
+    min = std::stoi(first_num);
+
+    if (comma == new_end)
+    {
+        // No comma found, max = min
+        max = min;
+    } else
+    {
+        // Comma found, parse the second number (max)
+        std::string second_num(comma + 1, new_end);
+        second_num.erase(std::remove_if(second_num.begin(), second_num.end(), ::isspace), second_num.end());
+        
+        if (second_num.empty())
+        {
+            // Empty value between ',' and '}'
+            max = -1;
+        } else if (!std::all_of(second_num.begin(), second_num.end(), ::isdigit))
+        {
+            throw std::runtime_error("Invalid number format for max");
+        } else
+        {
+            max = std::stoi(second_num);
+        }
+    }
+
+    // Ensure min is non-negative
+    if (min < 0)
+    {
+        throw std::runtime_error("Min cannot be negative");
+    }
+
+    // Ensure max is non-negative, except when it's -1
+    if (max < -1)
+    {
+        throw std::runtime_error("Max cannot be negative (except -1)");
+    }
+
+    // Ensure min <= max, except when max is -1
+    if (max != -1 && min > max)
+    {
+        throw std::runtime_error("Min cannot be greater than max");
+    }
+
+    return new_end + 1;
 }
 
-bool quantifierLoop(std::string::const_iterator text_start, std::string::const_iterator text_end, std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
+std::string::const_iterator handleQuantifier(std::string::const_iterator quantifier_start, std::string::const_iterator pattern_end, int& min, int& max)
+{
+    if (*quantifier_start == '*') 
+    {
+        min = 0;
+        max = -1;                       // -1 == infinite
+    }
+    else if (*quantifier_start == '+') 
+    {
+        min = 1;
+        max = -1;                       // -1 == infinite
+    }
+    else if (*quantifier_start == '?') 
+    {
+        min = 0;
+        max = 1;
+    }
+    else if (*quantifier_start == '{') 
+    {
+        return parseQuantifierRange(min, max, quantifier_start + 1, pattern_end) + 1;       // handle custom quantifier {n, m} | {n} | {n,}
+    }
+    return quantifier_start + 1;
+}
+
+bool quantifierLoop(std::string::const_iterator text_start, std::string::const_iterator text_end,
+                    std::string::const_iterator pattern_start, std::string::const_iterator pattern_end,
+                    std::string::const_iterator quantifier_start)                                           // pattern_start < quantifier_start < pattern_end
+{
+    auto matchers = matcherControlSetupBuilder(pattern_start, quantifier_start);
+    int min{};
+    int max{};
+    int index{};
+    auto new_pattern_start = handleQuantifier(quantifier_start, pattern_end, min, max);
+
+    
+
+    for (; index < min && text_start != text_end; ++index, ++text_start)                // handle required minimum matches
+    {
+        if (!matcherControlSetupMemoized(matchers, *text_start))
+        {
+            return false;
+        }
+    }
+
+    if (max == -1)                  // handle infinite optional matches loop
+    {
+        do
+        {
+            if (patternControl(text_start, text_end, new_pattern_start, pattern_end)) {                     // RECURSION CALL
+                return true;
+            }
+            ++text_start;
+        } while (text_start != text_end && matcherControlSetupMemoized(matchers, *text_start));
+    }
+
+    while (max > index && text_start != text_end && matcherControlSetupMemoized(matchers, *text_start))     // handle non-infinite optional matches loop
+    {
+        if (patternControl(text_start, text_end, new_pattern_start, pattern_end)) {                         // RECURSION CALL
+            return true;
+        }
+        ++text_start;
+        ++index;
+    };
+
+    return false;
+}
+
+
+
+
+
+
+
+
+
+
 
 
 std::function<bool(const char)> handleGroups(const std::string &groupPattern) {
