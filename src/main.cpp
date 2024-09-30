@@ -6,6 +6,33 @@
 #include <stdexcept>
 #include <cctype>
 
+constexpr bool isAnyMetaCharacter(const char c);
+constexpr bool isQuantifier(const char c);
+constexpr bool isQuantifierAdvanced(const char c);
+constexpr bool isCharacterClass(const char c);
+constexpr bool isGroup (const char c);
+constexpr bool is_w(const char c);
+constexpr bool is_W(const char c);
+constexpr bool is_d(const char c);
+constexpr bool is_D(const char c);
+std::function<bool(const char)> characterClassSelector(const char c);
+std::function<bool(const char)> plainCharacterMatcherBuilder(const std::vector<const char>& plainChars) ;
+bool matcherControl(const std::vector<std::function<bool(const char)>>& matchers, const char c);
+std::vector<std::function<bool(const char)>> matcherControlSetupBuilder(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
+bool matcherControlSetup(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end, const char c, bool negative_group_flag = false);
+bool matcherControlSetupMemoized(std::vector<std::function<bool(const char)>>& matchers, const char c, bool negative_group_flag = false);
+bool patternControl(std::string::const_iterator text_start, std::string::const_iterator text_end,
+                    std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
+std::string::const_iterator parseQuantifierRange(int& min, int& max, std::string::const_iterator start, std::string::const_iterator end);
+std::string::const_iterator handleQuantifier(std::string::const_iterator quantifier_start, std::string::const_iterator pattern_end, int& min, int& max);
+bool quantifierLoop(std::string::const_iterator text_start, std::string::const_iterator text_end,
+                    std::string::const_iterator pattern_start, std::string::const_iterator pattern_end,
+                    std::string::const_iterator quantifier_start,
+                    bool negative_group_flag = false);
+bool handleGroups(std::string::const_iterator text_start, std::string::const_iterator text_end,
+                    std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
+
+
 constexpr bool isAnyMetaCharacter(const char c)
 {
     return (
@@ -80,11 +107,6 @@ constexpr bool isGroup (const char c)
 
 
 
-
-
-
-
-
 constexpr bool is_w(const char c)
 {
     return (
@@ -107,10 +129,6 @@ constexpr bool is_D(const char c)
 {
     return !is_d(c);
 }
-
-
-
-
 
 
 
@@ -139,10 +157,6 @@ std::function<bool(const char)> characterClassSelector(const char c)
 
 
 
-
-
-
-
 std::function<bool(const char)> plainCharacterMatcherBuilder(const std::vector<const char>& plainChars) 
 {
     return [&plainChars](const char c) -> bool 
@@ -157,14 +171,6 @@ std::function<bool(const char)> plainCharacterMatcherBuilder(const std::vector<c
         return false;
     };
 }
-
-
-
-
-
-
-
-
 
 
 bool matcherControl(const std::vector<std::function<bool(const char)>>& matchers, const char c)
@@ -217,17 +223,21 @@ std::vector<std::function<bool(const char)>> matcherControlSetupBuilder(std::str
     return matchers;
 }
 
-bool matcherControlSetup(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end, const char c)
+bool matcherControlSetup(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end, const char c, bool negative_group_flag = false)
 {
-    return matcherControl(matcherControlSetupBuilder(pattern_start, pattern_end), c);
+    if (!negative_group_flag)
+        return matcherControl(matcherControlSetupBuilder(pattern_start, pattern_end), c);
+    else
+        return !matcherControl(matcherControlSetupBuilder(pattern_start, pattern_end), c);
 }
 
-bool matcherControlSetupMemoized(std::vector<std::function<bool(const char)>>& matchers, const char c)
+bool matcherControlSetupMemoized(std::vector<std::function<bool(const char)>>& matchers, const char c, bool negative_group_flag = false)
 {
-    return matcherControl(matchers, c);
+    if (!negative_group_flag)
+        return matcherControl(matchers, c);
+    else
+        return !matcherControl(matchers, c);
 }
-
-
 
 
 
@@ -285,14 +295,6 @@ bool patternControl(std::string::const_iterator text_start, std::string::const_i
     }
     return false;
 }
-
-
-
-
-
-
-
-
 
 
 
@@ -387,7 +389,8 @@ std::string::const_iterator handleQuantifier(std::string::const_iterator quantif
 
 bool quantifierLoop(std::string::const_iterator text_start, std::string::const_iterator text_end,
                     std::string::const_iterator pattern_start, std::string::const_iterator pattern_end,
-                    std::string::const_iterator quantifier_start)                                           // pattern_start < quantifier_start < pattern_end
+                    std::string::const_iterator quantifier_start,                   // pattern_start < quantifier_start < pattern_end
+                    bool negative_group_flag = false)
 {
     auto matchers = matcherControlSetupBuilder(pattern_start, quantifier_start);
     int min{};
@@ -395,11 +398,9 @@ bool quantifierLoop(std::string::const_iterator text_start, std::string::const_i
     int index{};
     auto new_pattern_start = handleQuantifier(quantifier_start, pattern_end, min, max);
 
-    
-
     for (; index < min && text_start != text_end; ++index, ++text_start)                // handle required minimum matches
     {
-        if (!matcherControlSetupMemoized(matchers, *text_start))
+        if (!matcherControlSetupMemoized(matchers, *text_start, negative_group_flag))
         {
             return false;
         }
@@ -413,11 +414,14 @@ bool quantifierLoop(std::string::const_iterator text_start, std::string::const_i
                 return true;
             }
             ++text_start;
-        } while (text_start != text_end && matcherControlSetupMemoized(matchers, *text_start));
+        } while (text_start != text_end && matcherControlSetupMemoized(matchers, *text_start, negative_group_flag));
     }
 
-    while (max > index && text_start != text_end && matcherControlSetupMemoized(matchers, *text_start))     // handle non-infinite optional matches loop
-    {
+    while (
+            max > index &&                                                                                  // handle non-infinite optional matches loop
+            text_start != text_end &&
+            matcherControlSetupMemoized(matchers, *text_start, negative_group_flag)
+    ) {
         if (patternControl(text_start, text_end, new_pattern_start, pattern_end)) {                         // RECURSION CALL
             return true;
         }
@@ -430,23 +434,38 @@ bool quantifierLoop(std::string::const_iterator text_start, std::string::const_i
 
 
 
+bool handleGroups(std::string::const_iterator text_start, std::string::const_iterator text_end,
+                    std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
+{
+    if (*pattern_start == '[')
+    {
+        bool isNegativeGroup = false;
+        auto group_end = std::find(pattern_start, pattern_end, ']');
 
+        if (group_end == pattern_end)
+        {
+            throw std::runtime_error("Closing ')' not found");
+        }
 
+        if (*(pattern_start + 1) == '^')
+        {
+            isNegativeGroup = true;
+        }
 
-
-
-
-
-
-
-std::function<bool(const char)> handleGroups(const std::string &groupPattern) {
-    // if (groupPattern.size() < 2) {
-    //     throw std::invalid_argument("Group Pattern too short");
-    // }
-
-    if (groupPattern[1] != '^') return handlePositiveGroup(groupPattern);
-    else if (groupPattern[1] == '^') return handleNegativeGroup(groupPattern);
+        if (group_end + 1 != pattern_end && isQuantifierAdvanced(*(group_end + 1))) {
+            return quantifierLoop(text_start, text_end, pattern_start, pattern_end, group_end + 1, isNegativeGroup);
+        }
+    }
+    if (*pattern_start == '(')
+    {
+        // call `main`
+    }
+    
+    return false;
 }
+
+
+
 
 bool match_pattern(const std::string &input_line, const std::string &pattern)
 {
