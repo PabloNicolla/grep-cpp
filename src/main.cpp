@@ -7,40 +7,12 @@
 #include <cctype>
 #include <stack>
 #include <memory>
+#include <vector>
 
-constexpr bool isAnyMetaCharacter(const char c);
-constexpr bool isQuantifier(const char c);
-constexpr bool isQuantifierAdvanced(const char c);
-constexpr bool isCharacterClass(const char c);
-constexpr bool isGroup(const char c);
-constexpr bool is_w(const char c);
-constexpr bool is_W(const char c);
-bool is_d(const char c);
-bool is_D(const char c);
-std::function<bool(const char)> characterClassSelector(const char c);
-std::function<bool(const char)> plainCharacterMatcherBuilder(const std::shared_ptr<std::vector<char>>& plainChars);
-bool matcherControl(const std::vector<std::function<bool(const char)>>& matchers, const char c);
-std::vector<std::function<bool(const char)>> matcherControlSetupBuilder(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
-bool matcherControlSetup(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end, const char c, bool negative_group_flag = false);
-bool matcherControlSetupMemoized(std::vector<std::function<bool(const char)>>& matchers, const char c, bool negative_group_flag = false);
-bool patternControl(std::string::const_iterator text_start, std::string::const_iterator text_end,
-  std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
-std::string::const_iterator parseQuantifierRange(int& min, int& max, std::string::const_iterator start, std::string::const_iterator end);
-std::string::const_iterator handleQuantifier(std::string::const_iterator quantifier_start, std::string::const_iterator pattern_end, int& min, int& max);
-bool quantifierLoop(std::string::const_iterator text_start, std::string::const_iterator text_end,
-  std::string::const_iterator pattern_start, std::string::const_iterator pattern_end,
-  std::string::const_iterator quantifier_start,
-  bool negative_group_flag = false, int pattern_end_offset = 0);
-bool handleGroups(std::string::const_iterator text_start, std::string::const_iterator text_end,
-  std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
-bool match_pattern(const std::string& input_line, const std::string& pattern);
-std::string::const_iterator findOutermostOr(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
-bool match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
-  std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
-bool handleScapedCharacter(std::string::const_iterator text_start, std::string::const_iterator text_end,
-  std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
-bool group_match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
-  std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
+#include "main.hpp"
+
+
+static std::vector<std::string> backReference{};
 
 
 constexpr bool isAnyMetaCharacter(const char c)
@@ -116,7 +88,6 @@ constexpr bool isGroup(const char c)
 }
 
 
-
 constexpr bool is_w(const char c)
 {
   return (
@@ -141,7 +112,6 @@ bool is_D(const char c)
 }
 
 
-
 std::function<bool(const char)> characterClassSelector(const char c)
 {
   switch (c)
@@ -164,7 +134,6 @@ std::function<bool(const char)> characterClassSelector(const char c)
     break;
   }
 }
-
 
 
 std::function<bool(const char)> plainCharacterMatcherBuilder(const std::shared_ptr<std::vector<char>>& sharedPlainChars)
@@ -250,29 +219,28 @@ bool matcherControlSetupMemoized(std::vector<std::function<bool(const char)>>& m
 }
 
 
-
-bool patternControl(std::string::const_iterator text_start, std::string::const_iterator text_end,
+RecResult patternControl(std::string::const_iterator text_start, std::string::const_iterator text_end,
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
 {
   if (pattern_start == pattern_end)
   {
-    return true;                            // pattern matched
+    return RecResult{text_start, true};                            // pattern matched
   }
   if (*pattern_start == '$' && pattern_start + 1 == pattern_end)
   {
-    return text_start == text_end;          // pattern must end here
+    return text_start == text_end ? RecResult({ text_start, true }) : RecResult{};          // pattern must end here
   }
   if (text_start == text_end)
   {
-    return false;                           // text ended without match
+    return RecResult{};                           // text ended without match
   }
   if (isQuantifierAdvanced(*pattern_start))
   {
-    return false;                           // throw std::invalid_argument("Error: Invalid target for quantifier.");
+    return RecResult{};                           // throw std::invalid_argument("Error: Invalid target for quantifier.");
   }
   if (*pattern_start == '^' || *pattern_start == '$')
   {
-    return false;                           // misused meta characters making regex impossible to have a valid match
+    return RecResult{};                           // misused meta characters making regex impossible to have a valid match
   }
 
   if (isGroup(*pattern_start))
@@ -293,9 +261,8 @@ bool patternControl(std::string::const_iterator text_start, std::string::const_i
     return patternControl(text_start + 1, text_end, pattern_start + 1, pattern_end);
   }
   // ^^^ must be the last condition ^^^
-  return false;
+  return RecResult{};
 }
-
 
 
 std::string::const_iterator parseQuantifierRange(int& min, int& max, std::string::const_iterator start, std::string::const_iterator end)
@@ -390,7 +357,7 @@ std::string::const_iterator handleQuantifier(std::string::const_iterator quantif
   return quantifier_start + 1;
 }
 
-bool quantifierLoop(std::string::const_iterator text_start, std::string::const_iterator text_end,
+RecResult quantifierLoop(std::string::const_iterator text_start, std::string::const_iterator text_end,
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end,
   std::string::const_iterator quantifier_start,                   // pattern_start < quantifier_start < pattern_end
   bool negative_group_flag, int pattern_end_offset)
@@ -398,41 +365,31 @@ bool quantifierLoop(std::string::const_iterator text_start, std::string::const_i
   auto matchers = matcherControlSetupBuilder(pattern_start, quantifier_start - pattern_end_offset);
   int min{};
   int max{};
-  int index{};
   auto new_pattern_start = handleQuantifier(quantifier_start, pattern_end, min, max);
 
-  for (; index < min && text_start != text_end; ++index, ++text_start)                // handle required minimum matches
-  {
-    if (!matcherControlSetupMemoized(matchers, *text_start, negative_group_flag))
-    {
-      return false;
+  // Find the maximum number of matches possible
+  auto text_it = text_start;
+  int max_matches = 0;
+  while (text_it != text_end && (max == -1 || max_matches < max) &&
+    matcherControlSetupMemoized(matchers, *text_it, negative_group_flag)) {
+    ++max_matches;
+    ++text_it;
+  }
+
+  // Try matches from max_matches down to min
+  for (int matches = max_matches; matches >= min; --matches) {
+    auto current_text_start = text_start + matches;
+    auto rec_result = patternControl(current_text_start, text_end, new_pattern_start, pattern_end);
+    if (rec_result.is_valid) {
+      return rec_result;
     }
   }
 
-  if (max == -1)                  // handle infinite optional matches loop
-  {
-    do
-    {
-      if (patternControl(text_start, text_end, new_pattern_start, pattern_end)) {                     // RECURSION CALL
-        return true;
-      }
-    } while (text_start != text_end && matcherControlSetupMemoized(matchers, *(text_start++), negative_group_flag));
-  }
-
-
-  do                              // handle non-infinite optional matches loop
-  {
-    if (patternControl(text_start, text_end, new_pattern_start, pattern_end)) {                       // RECURSION CALL
-      return true;
-    }
-  } while (max > index++ && text_start != text_end && matcherControlSetupMemoized(matchers, *(text_start++), negative_group_flag));
-
-  return false;
+  return RecResult{};
 }
 
 
-
-bool handleGroups(std::string::const_iterator text_start, std::string::const_iterator text_end,
+RecResult handleGroups(std::string::const_iterator text_start, std::string::const_iterator text_end,
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
 {
   if (*pattern_start == '[')
@@ -462,39 +419,74 @@ bool handleGroups(std::string::const_iterator text_start, std::string::const_ite
   }
   if (*pattern_start == '(')
   {
-    auto group_end = std::find(pattern_start, pattern_end, ')');
+    auto group_end = findClosingParenthesis(pattern_start, pattern_end);
 
     if (group_end == pattern_end)
     {
       throw std::runtime_error("Closing ')' not found");
     }
 
-    return group_match_main(text_start, text_end, pattern_start + 1, group_end);
+    int backReferenceIndex = backReference.size(); // size before recusion
+    backReference.emplace_back();
+    auto group_rec_result = group_match_main(text_start, text_end, pattern_start + 1, group_end);
+    if (group_rec_result.is_valid)
+    {
+      auto groupCapturedSize = group_rec_result.result - text_start;
+      backReference[backReferenceIndex] = std::string(text_start, text_start + groupCapturedSize);
+      auto rec_result = patternControl(text_start + groupCapturedSize, text_end, group_end + 1, pattern_end);
+      if (rec_result.is_valid)
+      {
+        return rec_result;
+      }
+    }
+    backReference.pop_back();
   }
 
-  return false;
+  return RecResult{};
 }
 
 
-
-bool handleScapedCharacter(std::string::const_iterator text_start, std::string::const_iterator text_end,
+RecResult handleScapedCharacter(std::string::const_iterator text_start, std::string::const_iterator text_end,
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
 {
   if (pattern_start + 1 == pattern_end)
   {
-    return false;                       // throw std::invalid_argument("Error: Dangling backslash.");
+    return RecResult{};                       // throw std::invalid_argument("Error: Dangling backslash.");
   }
+
+  int possibleBackRefIndex = (*(pattern_start + 1) - '0');
+  
   if (pattern_start + 2 != pattern_end && isQuantifierAdvanced(*(pattern_start + 2)))         // "\xq" where x is a character and q is a quantifier
   {
     return quantifierLoop(text_start, text_end, pattern_start, pattern_end, pattern_start + 2);
+  }
+  else if ((possibleBackRefIndex) >= 1 && (size_t)(possibleBackRefIndex) <= backReference.size())    // TODO support > 9 and quantifier
+  {
+    if (backReference_match_main(text_start, text_end, backReference[possibleBackRefIndex - 1].begin(), backReference[possibleBackRefIndex - 1].end()))
+    {
+      return patternControl(text_start + backReference[possibleBackRefIndex - 1].size(), text_end, pattern_start + 2, pattern_end);
+    }
   }
   else if (matcherControlSetup(pattern_start, pattern_start + 2, *text_start))                // "\xz" where x is a character and z is not a quantifier, or
   {                                                                                           // "\x"  where x is a character and the pattern ends after x
     return patternControl(text_start + 1, text_end, pattern_start + 2, pattern_end);
   }
-  return false;
+  return RecResult{};
 }
 
+
+bool backReference_match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
+  std::string::const_iterator back_ref_start, std::string::const_iterator back_ref_end)
+{
+  for (; back_ref_start != back_ref_end && text_start != text_end; ++back_ref_start, ++text_start)
+  {
+    if (*back_ref_start != *text_start) {
+      return false;
+    }
+  }
+
+  return back_ref_start == back_ref_end;
+}
 
 
 std::string::const_iterator findOutermostOr(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
@@ -528,22 +520,58 @@ std::string::const_iterator findOutermostOr(std::string::const_iterator pattern_
   return pattern_end;  // No outermost '|' found
 }
 
+std::string::const_iterator findClosingParenthesis(std::string::const_iterator start, std::string::const_iterator end)
+{
+  int scope = 0;
+  bool foundOpeningParenthesis = false;
+
+  for (auto it = start; it != end; ++it)
+  {
+    if (*it == '(')
+    {
+      scope++;
+      foundOpeningParenthesis = true;
+    }
+    else if (*it == ')')
+    {
+      if (!foundOpeningParenthesis)
+      {
+        throw std::runtime_error("Closing parenthesis found before opening parenthesis");
+      }
+      scope--;
+      if (scope == 0)
+      {
+        return it;  // Found the closing parenthesis in the same scope
+      }
+    }
+  }
+
+  if (!foundOpeningParenthesis)
+  {
+    throw std::runtime_error("No opening parenthesis found");
+  }
+  else
+  {
+    throw std::runtime_error("Unmatched opening parenthesis: scope never closed");
+  }
+}
 
 
-bool group_match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
+RecResult group_match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
 {
   if (pattern_start == pattern_end)
   {
-    return false;
+    return RecResult{};
   }
 
   auto orPosition = findOutermostOr(pattern_start, pattern_end);
 
   while (orPosition != pattern_end)
   {
-    if (group_match_main(text_start, text_end, pattern_start, orPosition)) {
-      return true;
+    auto group_rec_result = group_match_main(text_start, text_end, pattern_start, orPosition);
+    if (group_rec_result.is_valid) {
+      return group_rec_result;
     }
     pattern_start = orPosition + 1;
     orPosition = findOutermostOr(pattern_start, pattern_end);
@@ -552,22 +580,21 @@ bool group_match_main(std::string::const_iterator text_start, std::string::const
   return patternControl(text_start, text_end, pattern_start, pattern_end);
 }
 
-
-
-bool match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
+RecResult match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
   std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
 {
   if (pattern_start == pattern_end)
   {
-    return false;
+    return RecResult{};
   }
 
   auto orPosition = findOutermostOr(pattern_start, pattern_end);
 
   while (orPosition != pattern_end)
   {
-    if (match_main(text_start, text_end, pattern_start, orPosition)) {
-      return true;
+    auto main_rec_result = match_main(text_start, text_end, pattern_start, orPosition);
+    if (main_rec_result.is_valid) {
+      return main_rec_result;
     }
     pattern_start = orPosition + 1;
     orPosition = findOutermostOr(pattern_start, pattern_end);
@@ -579,60 +606,37 @@ bool match_main(std::string::const_iterator text_start, std::string::const_itera
 
   do
   {
-    if (patternControl(text_start, text_end, pattern_start, pattern_end))
+    auto rec_result = patternControl(text_start, text_end, pattern_start, pattern_end);
+    if (rec_result.is_valid)
     {
-      return true;
+      return rec_result;
     }
   } while (++text_start != text_end);
-  return false;
+  return RecResult{};
 }
 
-
-bool match_pattern(const std::string& input_line, const std::string& pattern)
+RecResult match_pattern(const std::string& input_line, const std::string& pattern)
 {
   return match_main(input_line.begin(), input_line.end(), pattern.begin(), pattern.end());
 }
 
-int main(int argc, char *argv[])
+
+int main(int argc, char* argv[])
 {
-    // Flush after every std::cout / std::cerr
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
-
-    std::cout << "Logs from your program will appear here" << std::endl;
-
-    if (argc != 3)
+  try
+  {
+    if (match_pattern("abc-def is abc-def, not efg, abc, or def", "(([abc]+)-([def]+)) is \\1, not ([^xyz]+), \\2, or \\3").is_valid)
     {
-        std::cerr << "Expected two arguments" << std::endl;
-        return 1;
+      return 0;
     }
-
-    std::string flag = argv[1];
-    std::string pattern = argv[2];
-
-    if (flag != "-E")
+    else
     {
-        std::cerr << "Expected first argument to be '-E'" << std::endl;
-        return 1;
+      return 1;
     }
-
-    std::string input_line;
-    std::getline(std::cin, input_line);
-
-    try
-    {
-        if (match_pattern(input_line, pattern))
-        {
-            return 0;
-        }
-        else
-        {
-            return 1;
-        }
-    }
-    catch (const std::runtime_error &e)
-    {
-        std::cerr << e.what() << std::endl;
-        return 1;
-    }
+  }
+  catch (const std::runtime_error& e)
+  {
+    std::cerr << e.what() << std::endl;
+    return 1;
+  }
 }
