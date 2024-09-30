@@ -5,6 +5,7 @@
 #include <functional>
 #include <stdexcept>
 #include <cctype>
+#include <stack>
 
 constexpr bool isAnyMetaCharacter(const char c);
 constexpr bool isQuantifier(const char c);
@@ -31,6 +32,8 @@ bool quantifierLoop(std::string::const_iterator text_start, std::string::const_i
                     bool negative_group_flag = false);
 bool handleGroups(std::string::const_iterator text_start, std::string::const_iterator text_end,
                     std::string::const_iterator pattern_start, std::string::const_iterator pattern_end);
+bool match_pattern(const std::string &input_line, const std::string &pattern);
+std::string::const_iterator findOutermostOr(const std::string& s);
 
 
 constexpr bool isAnyMetaCharacter(const char c)
@@ -265,10 +268,9 @@ bool patternControl(std::string::const_iterator text_start, std::string::const_i
         return false;                           // misused meta characters making regex impossible to have a valid match
     }
 
-    // if (*pattern_start == '|') // must be handled elsewhere{}
     if (isGroup(*pattern_start))
     {
-        //handle groups
+        return handleGroups(text_start, text_end, pattern_start, pattern_end);
     }
     if (*pattern_start == '\\')
     {
@@ -278,7 +280,7 @@ bool patternControl(std::string::const_iterator text_start, std::string::const_i
         }
         if (pattern_start + 2 != pattern_end && isQuantifierAdvanced(*(pattern_start + 2)))         // "\xq" where x is a character and q is a quantifier
         {
-            // handle quantifier
+            return quantifierLoop(text_start, text_end, pattern_start, pattern_end, pattern_start + 2);
         } 
         else if (matcherControlSetup(pattern_start, pattern_start + 2, *text_start))                // "\xz" where x is a character and z is not a quantifier, or
         {                                                                                           // "\x"  where x is a character and the pattern ends after x
@@ -287,7 +289,7 @@ bool patternControl(std::string::const_iterator text_start, std::string::const_i
     }
     if (pattern_start + 1 != pattern_end && isQuantifierAdvanced(*(pattern_start + 1)))
     {
-        // handle quantifier
+        return quantifierLoop(text_start, text_end, pattern_start, pattern_end, pattern_start + 1);
     }
     if (matcherControlSetup(pattern_start, pattern_start + 1, *text_start))
     {
@@ -466,30 +468,73 @@ bool handleGroups(std::string::const_iterator text_start, std::string::const_ite
 
 
 
+std::string::const_iterator findOutermostOr(std::string::const_iterator pattern_start, std::string::const_iterator pattern_end) {
+    std::stack<char> brackets;
+    
+    for (; pattern_start != pattern_end; ++pattern_start) {
+        switch (*pattern_start) {
+            case '(':
+            case '[':
+                brackets.push(*pattern_start);
+                break;
+            case ')':
+                if (!brackets.empty() && brackets.top() == '(') {
+                    brackets.pop();
+                }
+                break;
+            case ']':
+                if (!brackets.empty() && brackets.top() == '[') {
+                    brackets.pop();
+                }
+                break;
+            case '|':
+                if (brackets.empty()) {
+                    return pattern_start;  // Found outermost '|'
+                }
+                break;
+        }
+    }
+    
+    return pattern_end;  // No outermost '|' found
+}
+
+
+
+bool match_main(std::string::const_iterator text_start, std::string::const_iterator text_end,
+                    std::string::const_iterator pattern_start, std::string::const_iterator pattern_end)
+{
+    // if (*pattern_start == '|') // must be handled elsewhere{}
+    if (pattern_start == pattern_end)
+    {
+        return false;
+    }
+
+    if (*pattern_start == '^') {
+        return patternControl(text_start, text_end, pattern_start, pattern_end);
+    }
+
+    do {
+        auto orPosition = findOutermostOr(pattern_start, pattern_end);
+
+        if (orPosition != pattern_end) {
+            if (match_main(text_start, text_end, pattern_start, orPosition)) {
+                return true;
+            }
+            pattern_start = orPosition + 1;
+        } else {
+            if (patternControl(text_start, text_end, pattern_start, pattern_end)) {
+                return true;
+            }
+            text_start;
+        }
+    } while (text_start++ != text_end);
+    return false;
+}
+
 
 bool match_pattern(const std::string &input_line, const std::string &pattern)
 {
-    if (pattern.length() == 1)
-    {
-        return input_line.find(pattern) != std::string::npos;
-    }
-    else if (pattern == "\\d")
-    {
-        return std::find_if(input_line.begin(), input_line.end(), [](const auto c) -> bool { return std::isdigit(c); }) != input_line.end();
-    }
-    else if (pattern == "\\w")
-    {
-        return std::find_if(input_line.begin(), input_line.end(), isW) != input_line.end();
-    }
-    else if (pattern.length() > 1 && pattern[0] == '[' && pattern.back() == ']')
-    {
-        auto predicate = handleGroups(pattern);
-        return std::find_if(input_line.begin(), input_line.end(), predicate) != input_line.end();
-    }
-    else
-    {
-        throw std::runtime_error("Unhandled pattern " + pattern);
-    }
+    return match_main(input_line.begin(), input_line.end(), pattern.begin(), pattern.end());
 }
 
 int main(int argc, char *argv[])
@@ -535,6 +580,3 @@ int main(int argc, char *argv[])
         return 1;
     }
 }
-
-
-void match
